@@ -36,6 +36,42 @@ exports.createChat = async (req, res) => {
   }
 };
 
+exports.createOrGetChat = async (req, res) => {
+  try {
+    const { participants, isGroup, groupName } = req.body;
+    
+    // For direct messages, find existing chat
+    if (!isGroup) {
+      const existingChat = await Chat.findOne({
+        isGroup: false,
+        participants: { 
+          $all: [req.user._id, ...participants],
+          $size: 2
+        }
+      }).populate('participants', 'username profilePicture isOnline');
+
+      if (existingChat) {
+        return res.json({ chat: existingChat });
+      }
+    }
+
+    // Create new chat
+    const newChat = new Chat({
+      participants: [req.user._id, ...participants],
+      isGroup,
+      groupName: isGroup ? groupName : undefined
+    });
+
+    await newChat.save();
+    await newChat.populate('participants', 'username profilePicture isOnline');
+
+    res.status(201).json({ chat: newChat });
+  } catch (error) {
+    console.error('Create/Get chat error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
 exports.getChats = async (req, res) => {
   try {
     const chats = await Chat.find({

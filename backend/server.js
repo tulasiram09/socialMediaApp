@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const connectDB = require('./config/database');
+const Chat = require('./models/Chat'); // Add this line
 
 // Import models for debugging (add these lines)
 const FriendRequest = require('./models/FriendRequest');
@@ -89,31 +90,63 @@ app.get('/api/debug/my-requests', auth, async (req, res) => {
 });
 
 // Socket.io for real-time chat
-const users = {};
+const users = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join', (userId) => {
-    users[userId] = socket.id;
-    socket.join(userId);
+  // Handle user connection
+  socket.on('login', (userId) => {
+    console.log('User logged in:', userId);
+    users.set(userId, socket.id);
+    socket.userId = userId;
   });
 
-  socket.on('sendMessage', (data) => {
-    const { receiverId, message, senderId } = data;
-    if (users[receiverId]) {
-      io.to(users[receiverId]).emit('receiveMessage', {
-        senderId,
-        message,
+  // Handle joining chat rooms
+  socket.on('joinChat', (chatId) => {
+    console.log('User joined chat:', chatId);
+    socket.join(chatId);
+  });
+
+  // Handle new messages
+  socket.on('sendMessage', async (messageData) => {
+    try {
+      const { chatId, content, sender } = messageData;
+      console.log('New message received:', { chatId, sender: sender._id });
+      
+      // Save message to database first
+      const chat = await Chat.findById(chatId);
+      if (!chat) {
+        console.error('Chat not found:', chatId);
+        return;
+      }
+
+      const newMessage = {
+        sender: sender._id,
+        content,
         timestamp: new Date()
+      };
+
+      chat.messages.push(newMessage);
+      await chat.save();
+
+      // Broadcast message to all users in the chat room
+      io.to(chatId).emit('newMessage', {
+        chatId,
+        content,
+        sender,
+        _id: chat.messages[chat.messages.length - 1]._id,
+        timestamp: newMessage.timestamp
       });
+    } catch (error) {
+      console.error('Socket message error:', error);
     }
   });
 
+  // Handle disconnection
   socket.on('disconnect', () => {
-    const userId = Object.keys(users).find(key => users[key] === socket.id);
-    if (userId) {
-      delete users[userId];
+    if (socket.userId) {
+      users.delete(socket.userId);
     }
     console.log('User disconnected:', socket.id);
   });
